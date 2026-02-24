@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+    .freq-pill {
+        display: inline-block;
+        background: rgba(245, 158, 11, 0.15);
+        color: var(--warning);
+        font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+        font-size: 0.78rem;
+        font-weight: 600;
+        padding: 0.1rem 0.45rem;
+        border-radius: 4px;
+        margin: 1px 2px;
+        white-space: nowrap;
+    }
+    .freq-more {
+        display: inline-block;
+        background: rgba(148, 163, 184, 0.15);
+        color: var(--text-secondary);
+        font-size: 0.72rem;
+        font-weight: 600;
+        padding: 0.1rem 0.4rem;
+        border-radius: 4px;
+        margin: 1px 2px;
+        cursor: default;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="breadcrumb">
+        <a href="/">Map</a> <span class="sep">›</span>
+        <a href="/browse">Browse</a> <span class="sep">›</span>
+        <a href="/state/{{ state_code }}">{{ state_name }}</a> <span class="sep">›</span>
+        <span>{{ county }}</span>
+    </div>
+
+    <h1 style="margin-bottom: 0.5rem;">{{ county or 'Unknown County' }}, {{ state_name }}</h1>
+    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+        {{ "{:,}".format(total) }} license{{ 's' if total != 1 else '' }} found
+    </p>
+
+    <div class="card">
+        <div style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap;">
+            <span style="font-size: 0.85rem; color: var(--text-secondary);">Sort by:</span>
+            <a href="?sort=callsign{% if service_filter %}&service={{ service_filter }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+               class="btn btn-sm {% if sort == 'callsign' %}btn-primary{% else %}btn-outline{% endif %}">
+                Callsign
+            </a>
+            <a href="?sort=licensee{% if service_filter %}&service={{ service_filter }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+               class="btn btn-sm {% if sort == 'licensee' %}btn-primary{% else %}btn-outline{% endif %}">
+                Licensee
+            </a>
+            
+            <span style="margin-left: auto; font-size: 0.85rem; color: var(--text-secondary);">Status:</span>
+            <a href="?sort={{ sort }}{% if service_filter %}&service={{ service_filter }}{% endif %}"
+               class="btn btn-sm {% if not status_filter %}btn-primary{% else %}btn-outline{% endif %}">
+                All
+            </a>
+            <a href="?sort={{ sort }}&status=A{% if service_filter %}&service={{ service_filter }}{% endif %}"
+               class="btn btn-sm {% if status_filter == 'A' %}btn-primary{% else %}btn-outline{% endif %}">
+                Active
+            </a>
+            <a href="?sort={{ sort }}&status=E{% if service_filter %}&service={{ service_filter }}{% endif %}"
+               class="btn btn-sm {% if status_filter == 'E' %}btn-primary{% else %}btn-outline{% endif %}">
+                Expired
+            </a>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Callsign</th>
+                    <th>Licensee</th>
+                    <th>Service</th>
+                    <th>Frequency</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for lic in licenses %}
+                <tr>
+                    <td><a href="/license/{{ lic.callsign }}">{{ lic.callsign }}</a></td>
+                    <td>{{ lic.licensee_name or '—' }}</td>
+                    <td><span class="badge badge-service">{{ lic.radio_service or '—' }}</span></td>
+                    <td>
+                        {% if lic.freq_items %}
+                            {% for f in lic.freq_items %}
+                            <span class="freq-pill">{{ f }}</span>
+                            {% endfor %}
+                            {% if lic.freq_count > 3 %}
+                            <span class="freq-more" title="{{ lic.freq_count }} total frequencies">+{{ lic.freq_count - 3 }}</span>
+                            {% endif %}
+                        {% else %}
+                            <span style="color: var(--text-secondary);">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if lic.status == 'A' %}
+                        <span class="badge badge-active">Active</span>
+                        {% elif lic.status == 'E' %}
+                        <span class="badge badge-expired">Expired</span>
+                        {% else %}
+                        <span class="badge">{{ lic.status or '—' }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        {% if pages > 1 %}
+        <div class="pagination">
+            {% if page > 1 %}
+            <a href="?page={{ page - 1 }}&sort={{ sort }}{% if service_filter %}&service={{ service_filter }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}">&laquo; Prev</a>
+            {% endif %}
+            {% for p in range(1, pages + 1) %}
+                {% if p == page %}
+                <span class="active">{{ p }}</span>
+                {% elif p <= 3 or p > pages - 3 or (p >= page - 2 and p <= page + 2) %}
+                <a href="?page={{ p }}&sort={{ sort }}{% if service_filter %}&service={{ service_filter }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}">{{ p }}</a>
+                {% elif p == 4 or p == pages - 3 %}
+                <span style="color: var(--text-secondary);">…</span>
+                {% endif %}
+            {% endfor %}
+            {% if page < pages %}
+            <a href="?page={{ page + 1 }}&sort={{ sort }}{% if service_filter %}&service={{ service_filter }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}">Next &raquo;</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

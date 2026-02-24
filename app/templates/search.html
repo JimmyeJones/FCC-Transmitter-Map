@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="breadcrumb">
+        <a href="/">Map</a> <span class="sep">›</span>
+        <span>Search</span>
+    </div>
+
+    <h1 style="margin-bottom: 1rem;">Search Licenses</h1>
+
+    <div class="card">
+        <form action="/search" method="get" style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+            <input type="text" name="q" value="{{ query }}"
+                   placeholder="Search by callsign or licensee name..."
+                   style="flex: 1; background: var(--bg-primary); border: 1px solid var(--border);
+                          color: var(--text-primary); padding: 0.6rem 1rem; border-radius: 6px;
+                          font-size: 1rem;" />
+            <button type="submit" class="btn btn-primary" style="font-size: 1rem;">Search</button>
+        </form>
+
+        {% if query %}
+        <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+            {{ total }} result{{ 's' if total != 1 }} for "{{ query }}"
+        </p>
+
+        {% if results %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Callsign</th>
+                    <th>Licensee</th>
+                    <th>Service</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in results %}
+                <tr>
+                    <td><a href="/license/{{ r.callsign }}">{{ r.callsign }}</a></td>
+                    <td>{{ r.licensee_name or '—' }}</td>
+                    <td><span class="badge badge-service">{{ r.radio_service or '—' }}</span></td>
+                    <td>
+                        {% if r.status == 'A' %}
+                        <span class="badge badge-active">Active</span>
+                        {% elif r.status == 'E' %}
+                        <span class="badge badge-expired">Expired</span>
+                        {% else %}
+                        <span class="badge">{{ r.status or '—' }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: var(--text-secondary); text-align: center; padding: 2rem;">No results found.</p>
+        {% endif %}
+        {% else %}
+        <p style="color: var(--text-secondary); text-align: center; padding: 2rem;">
+            Enter a callsign or licensee name to search.
+        </p>
+        {% endif %}
+    </div>
+
+    <!-- Quick frequency search -->
+    <div class="card" style="margin-top: 1rem;">
+        <div class="card-header">🔍 Frequency Search</div>
+        <form action="" method="get" id="freqSearchForm"
+              style="display: flex; gap: 0.5rem; align-items: end;">
+            <div class="filter-group" style="flex: 1; margin-bottom: 0;">
+                <label>Frequency (MHz)</label>
+                <input type="number" id="freqInput" step="0.001" placeholder="e.g. 155.475"
+                       style="width: 100%; background: var(--bg-primary); border: 1px solid var(--border);
+                              color: var(--text-primary); padding: 0.5rem 0.75rem; border-radius: 6px;" />
+            </div>
+            <button type="submit" class="btn btn-primary" style="margin-bottom: 0;">Search</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.getElementById('freqSearchForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const freq = document.getElementById('freqInput').value;
+        if (freq) {
+            window.location.href = '/frequency/' + freq;
+        }
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="breadcrumb">
+        <a href="/">Map</a> <span class="sep">›</span>
+        <a href="/browse">Browse</a> <span class="sep">›</span>
+        <span>{{ state_name }}</span>
+    </div>
+
+    <h1 style="margin-bottom: 1rem;">{{ state_name }} ({{ state_code }})</h1>
+
+    {% if counties %}
+    <div class="card">
+        <div class="card-header">Counties ({{ counties|length }})</div>
+        <div class="state-grid">
+            {% for county in counties %}
+            <a class="state-card" href="/county/{{ state_code }}/{{ county.county }}">
+                <div class="name">{{ county.county }}</div>
+                <div class="count">{{ "{:,}".format(county.count) }} licenses</div>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% else %}
+    <div class="card">
+        <p style="color: var(--text-secondary);">No counties found for {{ state_name }}.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

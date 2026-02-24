@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="breadcrumb">
+        <a href="/">Map</a> <span class="sep">›</span>
+        <span>Browse States</span>
+    </div>
+
+    <h1 style="margin-bottom: 1rem;">Browse by State</h1>
+
+    <div class="state-grid">
+        {% for s in states %}
+        <a class="state-card" href="/state/{{ s.code }}">
+            <div class="name">{{ s.name }}</div>
+            <div class="count">{{ s.code }} · {{ "{:,}".format(s.count) }} licenses</div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

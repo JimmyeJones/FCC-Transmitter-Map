@@ -1,0 +1,27 @@
+{% for item in items %}
+<tr style="cursor: pointer;" onclick="panTo({{ item.latitude }}, {{ item.longitude }})">
+    <td><a href="/license/{{ item.callsign }}">{{ item.callsign }}</a></td>
+    <td style="max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+        {{ item.licensee_name or '—' }}
+    </td>
+    <td>{{ item.state or '' }}{{ ', ' + item.county if item.county else '' }}</td>
+</tr>
+{% endfor %}
+
+{% if not items %}
+<tr>
+    <td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 1rem;">
+        No results found.
+    </td>
+</tr>
+{% endif %}
+
+{% if pages > 1 %}
+<tr>
+    <td colspan="3" style="text-align: center; padding: 0.5rem;">
+        <span style="font-size: 0.8rem; color: var(--text-secondary);">
+            Page {{ page }} of {{ pages }} ({{ "{:,}".format(total) }} total)
+        </span>
+    </td>
+</tr>
+{% endif %}

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="breadcrumb">
+        <a href="/">Map</a> <span class="sep">›</span>
+        <span>Frequency Search</span>
+    </div>
+
+    <h1 style="margin-bottom: 0.5rem;">
+        <span class="freq">{{ frequency_display }}</span>
+    </h1>
+    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+        {{ "{:,}".format(total) }} assignments found (± {{ tolerance }} MHz)
+    </p>
+
+    <div class="card">
+        <div style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap;">
+            <span style="font-size: 0.85rem; color: var(--text-secondary);">Status:</span>
+            <a href="?tolerance={{ tolerance }}"
+               class="btn btn-sm {% if not status_filter %}btn-primary{% else %}btn-outline{% endif %}">
+                All
+            </a>
+            <a href="?tolerance={{ tolerance }}&status=A"
+               class="btn btn-sm {% if status_filter == 'A' %}btn-primary{% else %}btn-outline{% endif %}">
+                Active
+            </a>
+            <a href="?tolerance={{ tolerance }}&status=E"
+               class="btn btn-sm {% if status_filter == 'E' %}btn-primary{% else %}btn-outline{% endif %}">
+                Expired
+            </a>
+        </div>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Frequency (MHz)</th>
+                    <th>Callsign</th>
+                    <th>Licensee</th>
+                    <th>Service</th>
+                    <th>Location</th>
+                    <th>Emission</th>
+                    <th>Power</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in frequencies %}
+                <tr>
+                    <td class="freq">{{ f.frequency_display }}</td>
+                    <td><a href="/license/{{ f.callsign }}">{{ f.callsign }}</a></td>
+                    <td>{{ f.licensee_name or '—' }}</td>
+                    <td><span class="badge badge-service">{{ f.radio_service or '—' }}</span></td>
+                    <td>
+                        {% if f.state %}
+                        <a href="/county/{{ f.state }}/{{ f.county or 'Unknown' }}">
+                            {{ f.county or 'Unknown County' }}, {{ US_STATES.get(f.state, f.state) }}
+                        </a>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>{{ f.emission_designator or '—' }}</td>
+                    <td>
+                        {{ f.power or '—' }}
+                        {% if f.unit_of_power == 'W' %} W
+                        {% elif f.unit_of_power == 'K' %} kW
+                        {% elif f.unit_of_power == 'M' %} MW
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        {% if pages > 1 %}
+        <div class="pagination">
+            {% if page > 1 %}
+            <a href="?page={{ page - 1 }}&tolerance={{ tolerance }}{% if status_filter %}&status={{ status_filter }}{% endif %}">&laquo; Prev</a>
+            {% endif %}
+            {% for p in range(1, pages + 1) %}
+                {% if p == page %}
+                <span class="active">{{ p }}</span>
+                {% elif p <= 3 or p > pages - 3 or (p >= page - 2 and p <= page + 2) %}
+                <a href="?page={{ p }}&tolerance={{ tolerance }}{% if status_filter %}&status={{ status_filter }}{% endif %}">{{ p }}</a>
+                {% elif p == 4 or p == pages - 3 %}
+                <span style="color: var(--text-secondary);">…</span>
+                {% endif %}
+            {% endfor %}
+            {% if page < pages %}
+            <a href="?page={{ page + 1 }}&tolerance={{ tolerance }}{% if status_filter %}&status={{ status_filter }}{% endif %}">Next &raquo;</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

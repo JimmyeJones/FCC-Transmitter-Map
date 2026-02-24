@@ -1,0 +1,681 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<style>
+    body { overflow: hidden; }
+    .navbar { position: relative; z-index: 1001; }
+
+    /* Cluster count labels on the map */
+    .cluster-label {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+        text-shadow: 0 0 3px rgba(0,0,0,0.8);
+    }
+
+    /* Antenna pin icon for detail (fully-zoomed) view */
+    .antenna-icon {
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6));
+        transition: filter 0.15s ease;
+        z-index: 500 !important;
+    }
+    .antenna-icon:hover {
+        filter: drop-shadow(0 2px 8px rgba(0,0,0,0.8));
+        z-index: 9999 !important;
+    }
+    .antenna-icon img {
+        pointer-events: auto !important;
+        display: block !important;
+        width: 100% !important;
+        height: 100% !important;
+        image-rendering: crisp-edges;
+        image-rendering: pixelated;
+    }
+    
+    /* Custom antenna pane - always visible */
+    .leaflet-pane.leaflet-antenna-pane {
+        z-index: 500 !important;
+    }
+    
+    /* Sidebar header stays visible when collapsed */
+    .map-sidebar > div:first-child {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        justify-content: space-between;
+        margin-bottom: 1rem;
+    }
+    
+    .map-sidebar.collapsed > div:first-child {
+        flex-direction: column;
+        gap: 0;
+    }
+    
+    .map-sidebar.collapsed > div:first-child h3,
+    .map-sidebar.collapsed > form,
+    .map-sidebar.collapsed > div:last-child {
+        display: none;
+    }
+    
+    .map-sidebar.collapsed > div:first-child #sidebarToggle {
+        width: 100%;
+        margin-bottom: 1rem;
+    }
+
+    /* Mobile improvements */
+    @media (max-width: 768px) {
+        body { font-size: 16px; }
+        .map-container { flex-direction: column; height: auto; }
+        .map-sidebar { 
+            width: 100%; 
+            min-width: auto; 
+            max-height: 50vh;
+            border-right: none;
+            border-bottom: 1px solid var(--border);
+            z-index: 100;
+            -webkit-overflow-scrolling: touch;
+        }
+        .map-sidebar.collapsed {
+            max-height: 60px;
+            padding: 0.5rem;
+        }
+        #map { 
+            height: 50vh; 
+            width: 100%;
+            touch-action: manipulation;
+        }
+        .navbar { 
+            gap: 0.5rem; 
+            flex-wrap: wrap; 
+            padding: 0.75rem;
+        }
+        .nav-search { width: 100%; }
+        .nav-search input { flex: 1; }
+        .state-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+        
+        /* Better touch targets on mobile */
+        .btn {
+            padding: 0.75rem 1.25rem;
+            font-size: 1rem;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        .filter-group input,
+        .filter-group select {
+            padding: 0.75rem;
+            font-size: 1rem;
+            height: 44px;
+            -webkit-appearance: none;
+            appearance: none;
+            border-radius: 6px;
+        }
+        
+        /* Sidebar toggle visibility on mobile */
+        #sidebarToggle {
+            min-width: 44px !important;
+            min-height: 44px !important;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        
+        /* Hide collapsed sidebar label on mobile */
+        .map-sidebar.collapsed h3 {
+            display: none;
+        }
+        
+        /* Better results display on mobile */
+        #filterResults {
+            font-size: 0.9rem !important;
+            max-height: calc(50vh - 180px) !important;
+            -webkit-overflow-scrolling: touch;
+        }
+        
+        /* Map marker icons should be visible */
+        .leaflet-marker-pane img {
+            image-rendering: crisp-edges;
+            image-rendering: pixelated;
+        }
+    }
+
+    /* Tablet improvements */
+    @media (min-width: 769px) and (max-width: 1024px) {
+        .map-sidebar {
+            width: 320px;
+            min-width: 320px;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="map-container">
+    <!-- Sidebar with filters -->
+    <div class="map-sidebar" id="mapSidebar">
+        <div style="display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; margin-bottom: 1rem;">
+            <h3 style="margin: 0; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                🔍 <span>Filters</span>
+            </h3>
+            <button id="sidebarToggle" onclick="toggleSidebar()" style="background: transparent; border: 1px solid var(--border); color: var(--text-primary); width: 32px; height: 32px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; display: flex; align-items: center; justify-content: center;" title="Toggle sidebar">
+                ◄
+            </button>
+        </div>
+
+        <form id="filterForm">
+            <div class="filter-group">
+                <label for="filterCallsign" style="font-weight: 500; font-size: 0.9rem;">Callsign</label>
+                <input type="text" name="callsign" id="filterCallsign" placeholder="e.g. WQXR" 
+                       style="width: 100%;" />
+            </div>
+
+            <div class="filter-group">
+                <label for="filterState" style="font-weight: 500; font-size: 0.9rem;">State</label>
+                <select name="state" id="filterState" style="width: 100%;">
+                    <option value="">All States</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label for="filterService" style="font-weight: 500; font-size: 0.9rem;">Radio Service</label>
+                <select name="service" id="filterService" style="width: 100%;">
+                    <option value="">All Services</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label for="filterStatus" style="font-weight: 500; font-size: 0.9rem;">License Status</label>
+                <select name="status" id="filterStatus" style="width: 100%;">
+                    <option value="">All Licenses</option>
+                    <option value="A" selected>Active Only</option>
+                    <option value="E">Expired Only</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label style="font-weight: 500; font-size: 0.9rem;">Frequency Range (MHz)</label>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                    <input type="number" name="frequency_min" id="filterFreqMin" placeholder="Min" step="0.001" />
+                    <input type="number" name="frequency_max" id="filterFreqMax" placeholder="Max" step="0.001" />
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 1rem;">
+                <button type="button" class="btn btn-primary" onclick="applyFilters()" style="font-size: 0.9rem;">
+                    Apply
+                </button>
+                <button type="button" class="btn btn-outline" onclick="clearFilters()" style="font-size: 0.9rem;">
+                    Reset
+                </button>
+            </div>
+        </form>
+
+        <div style="border-top: 1px solid var(--border); padding-top: 0.75rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <span style="font-size: 0.85rem; font-weight: 500;">
+                    Results: <span id="resultCount" style="color: var(--accent);">0</span>
+                </span>
+                <span class="htmx-indicator"><span class="spinner" style="width: 12px; height: 12px;"></span></span>
+            </div>
+            <div id="filterResults"
+                 style="max-height: calc(100vh - 450px); overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem;">
+                <p style="color: var(--text-secondary); font-size: 0.85rem; text-align: center; padding: 2rem 1rem;">
+                    Pan/zoom the map or apply filters to see results.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Map -->
+    <div class="map-main">
+        <div id="map"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // State name mapping  
+    const STATE_NAMES = {
+        "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+        "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+        "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
+        "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+        "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+        "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+        "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+        "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+        "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+        "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+        "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
+        "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+        "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia",
+        "PR": "Puerto Rico", "VI": "Virgin Islands", "GU": "Guam",
+        "AS": "American Samoa", "MP": "Northern Mariana Islands",
+    };
+
+    function getStateName(code) {
+        return STATE_NAMES[code?.toUpperCase()] || code || "Unknown";
+    }
+
+    // Initialize map with Canvas renderer for performance
+    const canvasRenderer = L.canvas({ padding: 0.5, tolerance: 6 });
+
+    const map = L.map('map', {
+        preferCanvas: true,
+    }).setView([{{ default_lat }}, {{ default_lng }}], {{ default_zoom }});
+
+    // Create a custom pane for antenna markers to ensure they stay visible
+    if (!map.getPane('antennaPane')) {
+        map.createPane('antennaPane');
+        map.getPane('antennaPane').style.zIndex = 500;
+        map.getPane('antennaPane').style.pointerEvents = 'auto';
+    }
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        maxZoom: 19,
+    }).addTo(map);
+
+    // Layer group that holds all current markers (canvas-rendered circles)
+    let pointsLayer = L.layerGroup().addTo(map);
+    
+    // Create antenna marker layer with custom pane
+    let antennaMarkers = L.layerGroup().addTo(map);
+
+    // Load states for filter dropdown
+    fetch('/api/states')
+        .then(r => r.json())
+        .then(data => {
+            const sel = document.getElementById('filterState');
+            data.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.state;
+                const stateName = getStateName(s.state);
+                opt.textContent = `${stateName} (${s.count.toLocaleString()})`;
+                sel.appendChild(opt);
+            });
+        });
+
+    // Load services for filter dropdown
+    fetch('/api/services')
+        .then(r => r.json())
+        .then(data => {
+            const sel = document.getElementById('filterService');
+            data.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.code;
+                opt.textContent = `${s.code} — ${s.description}`;
+                sel.appendChild(opt);
+            });
+        });
+
+    // Parse URL query parameters and set filter values
+    function loadFiltersFromURL() {
+        const params = new URLSearchParams(window.location.search);
+        
+        if (params.has('callsign')) {
+            document.getElementById('filterCallsign').value = params.get('callsign');
+        }
+        if (params.has('state')) {
+            document.getElementById('filterState').value = params.get('state');
+        }
+        if (params.has('service')) {
+            document.getElementById('filterService').value = params.get('service');
+        }
+        if (params.has('status')) {
+            document.getElementById('filterStatus').value = params.get('status');
+        } else {
+            document.getElementById('filterStatus').value = 'A';
+        }
+        if (params.has('frequency_min')) {
+            document.getElementById('filterFreqMin').value = params.get('frequency_min');
+        }
+        if (params.has('frequency_max')) {
+            document.getElementById('filterFreqMax').value = params.get('frequency_max');
+        }
+    }
+
+    // Update URL with current filter values
+    function updateURL() {
+        const params = new URLSearchParams();
+        const callsign = document.getElementById('filterCallsign').value;
+        const state = document.getElementById('filterState').value;
+        const service = document.getElementById('filterService').value;
+        const status = document.getElementById('filterStatus').value;
+        const freqMin = document.getElementById('filterFreqMin').value;
+        const freqMax = document.getElementById('filterFreqMax').value;
+
+        if (callsign) params.set('callsign', callsign);
+        if (state) params.set('state', state);
+        if (service) params.set('service', service);
+        if (status) params.set('status', status);
+        if (freqMin) params.set('frequency_min', freqMin);
+        if (freqMax) params.set('frequency_max', freqMax);
+
+        const queryString = params.toString();
+        const newURL = queryString ? `${window.location.pathname}?${queryString}` : window.location.pathname;
+        window.history.replaceState({ path: newURL }, '', newURL);
+    }
+
+    // -- helpers for cluster circle sizing / color --------------------
+    function clusterRadius(cnt) {
+        if (cnt <= 1) return 3;
+        // log-scale: min 3.5, max 12 for minimal visual clutter
+        return Math.min(12, 3.5 + Math.log2(cnt) * 1.2);
+    }
+
+    function clusterColor(cnt) {
+        if (cnt <= 1)   return '#3b82f6';   // blue
+        if (cnt < 10)   return '#10b981';   // green
+        if (cnt < 50)   return '#f59e0b';   // amber
+        if (cnt < 500)  return '#f97316';   // orange
+        if (cnt < 5000) return '#ef4444';   // red
+        return '#991b1b';                    // dark red
+    }
+
+    // Debounce timer
+    let loadTimer = null;
+    let activeMapRequestController = null;
+    let latestMapRequestToken = 0;
+
+    function loadMapData() {
+        const bounds = map.getBounds();
+        const params = new URLSearchParams({
+            min_lat: bounds.getSouth(),
+            max_lat: bounds.getNorth(),
+            min_lng: bounds.getWest(),
+            max_lng: bounds.getEast(),
+        });
+
+        // Add filters
+        const callsign = document.getElementById('filterCallsign').value;
+        const state = document.getElementById('filterState').value;
+        const service = document.getElementById('filterService').value;
+        const status = document.getElementById('filterStatus').value;
+        const freqMin = document.getElementById('filterFreqMin').value;
+        const freqMax = document.getElementById('filterFreqMax').value;
+
+        if (callsign) params.set('callsign', callsign);
+        if (state) params.set('state', state);
+        if (service) params.set('service', service);
+        if (status) params.set('status', status);
+        if (freqMin) params.set('frequency_min', freqMin);
+        if (freqMax) params.set('frequency_max', freqMax);
+
+        const requestToken = ++latestMapRequestToken;
+
+        if (activeMapRequestController) {
+            activeMapRequestController.abort();
+        }
+
+        const controller = new AbortController();
+        activeMapRequestController = controller;
+        let requestTimedOut = false;
+        const timeoutId = setTimeout(() => {
+            requestTimedOut = true;
+            controller.abort();
+        }, 15000);
+
+        fetch(`/api/map?${params}`, { signal: controller.signal })
+            .then(r => {
+                if (!r.ok) throw new Error(`Server error: ${r.status}`);
+                return r.json();
+            })
+            .then(data => {
+                if (requestToken !== latestMapRequestToken) return;
+                if (!data || !data.features) throw new Error('Invalid response from server');
+
+                // Clear previous layers
+                pointsLayer.clearLayers();
+                antennaMarkers.clearLayers();
+
+                const isCluster = data.mode === 'cluster';
+                const feats = data.features || [];
+                let skipped = 0;
+
+                feats.forEach(f => {
+                    const lat = Number(f.lat);
+                    const lng = Number(f.lng);
+                    if (!Number.isFinite(lat) || !Number.isFinite(lng) ||
+                        lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                        skipped++;
+                        return;
+                    }
+
+                    if (isCluster) {
+                        const cnt = f.cnt || 1;
+                        
+                        // Show antenna icon for single licenses, even in cluster mode
+                        if (cnt === 1) {
+                            const antennaIcon = L.icon({
+                                iconUrl: 'https://uxwing.com/wp-content/themes/uxwing/download/internet-network-technology/antenna-icon.svg',
+                                iconSize: [32, 40],
+                                iconAnchor: [16, 40],
+                                popupAnchor: [0, -40],
+                                className: 'antenna-icon',
+                            });
+                            const marker = L.marker([lat, lng], { icon: antennaIcon, pane: 'antennaPane' });
+                            const cs = f.cs || 'UNKNOWN';
+                            const licensee = f.lic || 'Unlicensed';
+                            const svc = f.svc || '';
+                            const county = f.county || 'Unknown County';
+                            const stateName = getStateName(f.state);
+                            marker.bindPopup(
+                                `<div style="font-family:sans-serif;min-width:200px">` +
+                                `<strong style="font-size:1.1em"><a href="/license/${cs}">${cs}</a></strong><br>` +
+                                `<span style="color:#666">${licensee}</span><br>` +
+                                `<span style="font-size:0.85em;color:#888">${svc} &middot; ${county}, ${stateName}</span></div>`
+                            );
+                            antennaMarkers.addLayer(marker);
+                        } else {
+                            // Show circle for multiple licenses
+                            const r = clusterRadius(cnt);
+                            const color = clusterColor(cnt);
+                            const circle = L.circleMarker([lat, lng], {
+                                renderer: canvasRenderer,
+                                radius: r,
+                                fillColor: color,
+                                color: '#0f172a',
+                                weight: 0.6,
+                                opacity: 0.6,
+                                fillOpacity: 0.4,
+                            });
+                            const county = f.county || 'Unknown';
+                            const stateName = getStateName(f.state);
+                            const cntFmt = Number(cnt).toLocaleString();
+                            circle.bindPopup(
+                                `<div style="font-family:sans-serif;min-width:180px">` +
+                                `<strong>${county}, ${stateName}</strong><br>` +
+                                `<span style="color:#666">${cntFmt} licenses in this area</span><br>` +
+                                `<span style="font-size:0.85em;color:#888">Zoom in for details</span></div>`
+                            );
+                            // Show count label for large clusters
+                            if (cnt >= 10) {
+                                circle.bindTooltip(cntFmt, {
+                                    permanent: true,
+                                    direction: 'center',
+                                    className: 'cluster-label',
+                                });
+                            }
+                            pointsLayer.addLayer(circle);
+                        }
+                    } else {
+                        // Individual point — antenna icon from external SVG (detail mode)
+                        const antennaIcon = L.icon({
+                            iconUrl: 'https://uxwing.com/wp-content/themes/uxwing/download/internet-network-technology/antenna-icon.svg',
+                            iconSize: [32, 40],
+                            iconAnchor: [16, 40],
+                            popupAnchor: [0, -40],
+                            className: 'antenna-icon',
+                        });
+                        const marker = L.marker([lat, lng], { icon: antennaIcon, pane: 'antennaPane' });
+                        const cs = f.cs || 'UNKNOWN';
+                        const licensee = f.lic || 'Unlicensed';
+                        const svc = f.svc || '';
+                        const county = f.county || 'Unknown County';
+                        const stateName = getStateName(f.state);
+                        marker.bindPopup(
+                            `<div style="font-family:sans-serif;min-width:200px">` +
+                            `<strong style="font-size:1.1em"><a href="/license/${cs}">${cs}</a></strong><br>` +
+                            `<span style="color:#666">${licensee}</span><br>` +
+                            `<span style="font-size:0.85em;color:#888">${svc} &middot; ${county}, ${stateName}</span></div>`
+                        );
+                        antennaMarkers.addLayer(marker);
+                    }
+                });
+
+                if (skipped > 0) console.log(`Skipped ${skipped} invalid coords`);
+
+                const totalCount = Number(data.total_count ?? feats.length);
+                document.getElementById('resultCount').textContent = totalCount.toLocaleString();
+
+                // Update sidebar results
+                updateSidebarResults(feats, isCluster, totalCount);
+            })
+            .catch(err => {
+                if (requestToken !== latestMapRequestToken) return;
+                if (err.name === 'AbortError' && !requestTimedOut) return;
+
+                console.error('Error loading map data:', err);
+                pointsLayer.clearLayers();
+                antennaMarkers.clearLayers();
+                const container = document.getElementById('filterResults');
+                let errorMsg = 'Error loading results. ';
+                if (err.name === 'AbortError') {
+                    errorMsg += 'Request timed out — try zooming in or adjusting filters.';
+                } else {
+                    errorMsg += 'Please try adjusting your view or filters.';
+                }
+                container.innerHTML = `<p style="color: #ef4444; font-size: 0.85rem; text-align: center; padding: 1rem;">${errorMsg}</p>`;
+                document.getElementById('resultCount').textContent = '0';
+            })
+            .finally(() => {
+                clearTimeout(timeoutId);
+                if (activeMapRequestController === controller) activeMapRequestController = null;
+            });
+    }
+
+    function updateSidebarResults(features, isCluster, totalCount) {
+        const container = document.getElementById('filterResults');
+        try {
+            if (!features || !Array.isArray(features) || features.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-secondary); font-size: 0.85rem; text-align: center; padding: 1rem;">No results in current view.</p>';
+                return;
+            }
+
+            let html = '';
+
+            if (isCluster) {
+                html += `<p style="font-size:0.8rem;color:var(--text-secondary);padding:0.25rem 0.5rem 0.5rem">` +
+                    `${totalCount.toLocaleString()} licenses — zoom in for individual points.</p>`;
+                html += '<table style="font-size:0.8rem;width:100%">';
+                html += '<tr><th style="text-align:left">Area</th><th style="text-align:right">Count</th></tr>';
+                features.slice(0, 100).forEach(f => {
+                    const county = f.county || 'Unknown';
+                    const stateName = getStateName(f.state);
+                    const cnt = Number(f.cnt || 0).toLocaleString();
+                    html += `<tr style="cursor:pointer;border-bottom:1px solid var(--border)" onclick="panTo(${Number(f.lat)},${Number(f.lng)})">` +
+                        `<td style="font-size:0.75rem">${county}, ${stateName}</td>` +
+                        `<td style="text-align:right;font-variant-numeric:tabular-nums">${cnt}</td></tr>`;
+                });
+            } else {
+                html += '<table style="font-size:0.8rem;width:100%">';
+                html += '<tr><th style="text-align:left">Callsign</th><th style="text-align:left">Licensee</th><th style="text-align:left">Location</th></tr>';
+                features.slice(0, 100).forEach(f => {
+                    const cs = f.cs || 'UNKNOWN';
+                    const licensee = f.lic || 'Unlicensed';
+                    const county = f.county || 'Unknown County';
+                    const stateName = getStateName(f.state);
+                    html += `<tr style="cursor:pointer;border-bottom:1px solid var(--border)" onclick="panTo(${Number(f.lat)},${Number(f.lng)})">` +
+                        `<td><a href="/license/${cs}">${cs}</a></td>` +
+                        `<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${licensee}</td>` +
+                        `<td style="font-size:0.75rem">${county}, ${stateName}</td></tr>`;
+                });
+            }
+            html += '</table>';
+            if (features.length > 100) {
+                html += `<p style="text-align:center;font-size:0.8rem;color:var(--text-secondary);padding:0.5rem">Showing 100 of ${features.length.toLocaleString()}</p>`;
+            }
+            container.innerHTML = html;
+        } catch (e) {
+            console.error('Error updating sidebar results:', e);
+            container.innerHTML = '<p style="color: #ef4444; font-size: 0.85rem; text-align: center; padding: 1rem;">Error displaying results.</p>';
+        }
+    }
+
+    function panTo(lat, lng) {
+        map.setView([lat, lng], Math.max(map.getZoom() + 3, 14));
+    }
+
+    function applyFilters() {
+        updateURL();
+        loadMapData();
+    }
+
+    function clearFilters() {
+        document.getElementById('filterCallsign').value = '';
+        document.getElementById('filterState').value = '';
+        document.getElementById('filterService').value = '';
+        document.getElementById('filterStatus').value = 'A';
+        document.getElementById('filterFreqMin').value = '';
+        document.getElementById('filterFreqMax').value = '';
+        window.history.replaceState({ path: window.location.pathname }, '', window.location.pathname);
+        loadMapData();
+    }
+
+    // Load data on map move (debounced)
+    map.on('moveend', function() {
+        clearTimeout(loadTimer);
+        loadTimer = setTimeout(loadMapData, 300);
+    });
+
+    // Fix antenna markers disappearing at extreme zoom - ensure pane stays visible
+    map.on('zoom', function() {
+        const antennaPane = map.getPane('antennaPane');
+        if (antennaPane) {
+            antennaPane.style.display = 'block';
+            antennaPane.style.visibility = 'visible';
+            antennaPane.style.pointerEvents = 'auto';
+            antennaPane.style.opacity = '1';
+            antennaPane.style.zIndex = '500';
+        }
+    });
+
+    // Load initial filters from URL
+    loadFiltersFromURL();
+
+    // Initial load
+    loadMapData();
+
+    // Sidebar collapse/expand
+    function toggleSidebar() {
+        const sidebar = document.getElementById('mapSidebar');
+        const btn = document.getElementById('sidebarToggle');
+        
+        if (sidebar.classList.contains('collapsed')) {
+            sidebar.classList.remove('collapsed');
+            btn.textContent = '◄';
+            btn.title = 'Collapse sidebar';
+            localStorage.setItem('sidebarCollapsed', 'false');
+        } else {
+            sidebar.classList.add('collapsed');
+            btn.textContent = '►';
+            btn.title = 'Expand sidebar';
+            localStorage.setItem('sidebarCollapsed', 'true');
+        }
+        setTimeout(() => map.invalidateSize(), 100);
+    }
+    
+    // Restore sidebar collapse state from localStorage
+    if (localStorage.getItem('sidebarCollapsed') === 'true') {
+        document.getElementById('mapSidebar').classList.add('collapsed');
+        document.getElementById('sidebarToggle').textContent = '►';
+    }
+</script>
+{% endblock %}

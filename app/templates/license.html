@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="breadcrumb">
+        <a href="/">Map</a> <span class="sep">›</span>
+        <span>License Detail</span>
+    </div>
+
+    {% for lic in licenses %}
+    <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+        <h1>{{ lic.callsign }}</h1>
+        {% if lic.status == 'A' %}
+        <span class="badge badge-active" style="font-size: 0.9rem;">Active</span>
+        {% elif lic.status == 'E' %}
+        <span class="badge badge-expired" style="font-size: 0.9rem;">Expired</span>
+        {% else %}
+        <span class="badge" style="font-size: 0.9rem;">{{ lic.status or 'Unknown' }}</span>
+        {% endif %}
+    </div>
+
+    <!-- License Info -->
+    <div class="card">
+        <div class="card-header">License Information</div>
+        <div class="info-grid">
+            <div class="info-item">
+                <label>Licensee</label>
+                <div class="value">{{ lic.licensee_name or '—' }}</div>
+            </div>
+            <div class="info-item">
+                <label>Radio Service</label>
+                <div class="value">
+                    <span class="badge badge-service">{{ lic.radio_service or '—' }}</span>
+                    {% if lic.service %}{{ lic.service.description }}{% endif %}
+                </div>
+            </div>
+            <div class="info-item">
+                <label>FRN</label>
+                <div class="value">{{ lic.frn or '—' }}</div>
+            </div>
+            <div class="info-item">
+                <label>Grant Date</label>
+                <div class="value">{{ lic.grant_date or '—' }}</div>
+            </div>
+            <div class="info-item">
+                <label>Expiration Date</label>
+                <div class="value">{{ lic.expiration_date or '—' }}</div>
+            </div>
+            <div class="info-item">
+                <label>Effective Date</label>
+                <div class="value">{{ lic.effective_date or '—' }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Locations & Frequencies -->
+    {% for loc in lic.locations %}
+    <div class="card">
+        <div class="card-header">
+            📍 Location {{ loop.index }}
+            {% if loc.state %}
+            — {{ loc.county or 'Unknown County' }}{% if loc.county and loc.state %}, {% endif %}{{ US_STATES.get(loc.state, loc.state) }}
+            {% endif %}
+        </div>
+
+        <div class="info-grid" style="margin-bottom: 1rem;">
+            <div class="info-item">
+                <label>Coordinates</label>
+                <div class="value">
+                    {% if loc.latitude and loc.longitude %}
+                    {{ "%.6f"|format(loc.latitude) }}, {{ "%.6f"|format(loc.longitude) }}
+                    {% else %}—{% endif %}
+                </div>
+            </div>
+            <div class="info-item">
+                <label>State</label>
+                <div class="value">
+                    {% if loc.state %}
+                    <a href="/state/{{ loc.state }}">{{ US_STATES.get(loc.state, loc.state) }}</a>
+                    {% else %}—{% endif %}
+                </div>
+            </div>
+            <div class="info-item">
+                <label>County</label>
+                <div class="value">
+                    {% if loc.county and loc.state %}
+                    <a href="/county/{{ loc.state }}/{{ loc.county }}">{{ loc.county }}</a>
+                    {% else %}{{ loc.county or '—' }}{% endif %}
+                </div>
+            </div>
+            <div class="info-item">
+                <label>Ground Elevation</label>
+                <div class="value">{{ loc.ground_elevation or '—' }}{% if loc.ground_elevation %} m{% endif %}</div>
+            </div>
+        </div>
+
+        {% if loc.frequencies %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Frequency (MHz)</th>
+                    <th>Emission</th>
+                    <th>Power</th>
+                    <th>Class</th>
+                    <th>Decoded Emission</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for freq in loc.frequencies %}
+                <tr>
+                    <td>
+                        <a class="freq" href="/frequency/{{ freq.frequency_mhz }}">
+                            {{ freq.frequency_mhz }}
+                        </a>
+                        {% if freq.frequency_upper_mhz %}
+                        — {{ freq.frequency_upper_mhz }}
+                        {% endif %}
+                    </td>
+                    <td>{{ freq.emission_designator or '—' }}</td>
+                    <td>
+                        {{ freq.power or '—' }}
+                        {% if freq.unit_of_power == 'W' %} W
+                        {% elif freq.unit_of_power == 'K' %} kW
+                        {% elif freq.unit_of_power == 'M' %} MW
+                        {% endif %}
+                    </td>
+                    <td>{{ freq.station_class or '—' }}</td>
+                    <td style="font-size: 0.8rem; color: var(--text-secondary);">
+                        {% if freq._parsed_emission %}
+                            {% if freq._parsed_emission.bandwidth %}BW: {{ freq._parsed_emission.bandwidth }}{% endif %}
+                            {% if freq._parsed_emission.modulation %}<br/>Mod: {{ freq._parsed_emission.modulation }}{% endif %}
+                            {% if freq._parsed_emission.signal_type %}<br/>Sig: {{ freq._parsed_emission.signal_type }}{% endif %}
+                        {% else %}—{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: var(--text-secondary); font-size: 0.9rem;">No frequency assignments.</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    <!-- Location Map -->
+    {% if lic.locations %}
+    <div class="card">
+        <div class="card-header">📍 Location Map</div>
+        <div id="licenseMap" style="height: 400px; border-radius: 6px;"></div>
+    </div>
+    {% endif %}
+
+    {% endfor %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // State name mapping (same as in index.html and backend)
+    const STATE_NAMES = {
+        "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+        "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+        "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
+        "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
+        "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+        "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+        "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
+        "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
+        "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+        "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
+        "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
+        "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
+        "WI": "Wisconsin", "WY": "Wyoming", "DC": "District of Columbia",
+        "PR": "Puerto Rico", "VI": "Virgin Islands", "GU": "Guam",
+        "AS": "American Samoa", "MP": "Northern Mariana Islands",
+    };
+
+    function getStateName(code) {
+        return STATE_NAMES[code?.toUpperCase()] || code || "Unknown";
+    }
+
+    // Build location map for this license
+    const locations = [
+        {% for lic in licenses %}
+        {% for loc in lic.locations %}
+        {% if loc.latitude and loc.longitude %}
+        { lat: {{ loc.latitude }}, lng: {{ loc.longitude }}, county: "{{ loc.county or 'Unknown County' }}", state: "{{ loc.state or '' }}" },
+        {% endif %}
+        {% endfor %}
+        {% endfor %}
+    ];
+
+    if (locations.length > 0) {
+        const licMap = L.map('licenseMap').setView([locations[0].lat, locations[0].lng], 10);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap',
+            maxZoom: 19,
+        }).addTo(licMap);
+
+        const bounds = [];
+        locations.forEach(loc => {
+            const stateName = getStateName(loc.state);
+            const label = `${loc.county}, ${stateName}`;
+            L.marker([loc.lat, loc.lng])
+                .addTo(licMap)
+                .bindPopup(label);
+            bounds.push([loc.lat, loc.lng]);
+        });
+
+        if (bounds.length > 1) {
+            licMap.fitBounds(bounds, { padding: [30, 30] });
+        }
+    }
+</script>
+{% endblock %}
