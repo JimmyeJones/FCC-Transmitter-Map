@@ -451,60 +451,38 @@
                     if (isCluster) {
                         const cnt = f.cnt || 1;
                         
-                        // Show antenna icon for single licenses, even in cluster mode
-                        if (cnt === 1) {
-                            const antennaIcon = L.icon({
-                                iconUrl: 'https://uxwing.com/wp-content/themes/uxwing/download/internet-network-technology/antenna-icon.svg',
-                                iconSize: [32, 40],
-                                iconAnchor: [16, 40],
-                                popupAnchor: [0, -40],
-                                className: 'antenna-icon',
+                        // In cluster mode, always show circles (even for cnt=1)
+                        // User needs to zoom in more to see individual callsign details
+                        const r = clusterRadius(cnt);
+                        const color = clusterColor(cnt);
+                        const circle = L.circleMarker([lat, lng], {
+                            renderer: canvasRenderer,
+                            radius: r,
+                            fillColor: color,
+                            color: '#0f172a',
+                            weight: 0.6,
+                            opacity: 0.6,
+                            fillOpacity: 0.4,
+                        });
+                        const county = f.county || 'Unknown';
+                        const stateName = getStateName(f.state);
+                        const cntFmt = Number(cnt).toLocaleString();
+                        const plural = cnt === 1 ? 'license' : 'licenses';
+                        circle.bindPopup(
+                            `<div style="font-family:sans-serif;min-width:180px">` +
+                            `<strong>${county}, ${stateName}</strong><br>` +
+                            `<span style="color:#666">${cntFmt} ${plural} in this area</span><br>` +
+                            `<span style="font-size:0.85em;color:#888">Zoom in for details</span></div>`
+                        );
+                        // Show count label for large clusters
+                        if (cnt >= 10) {
+                            circle.bindTooltip(cntFmt, {
+                                permanent: true,
+                                direction: 'center',
+                                className: 'cluster-label',
                             });
-                            const marker = L.marker([lat, lng], { icon: antennaIcon, pane: 'antennaPane' });
-                            const cs = f.cs || 'UNKNOWN';
-                            const licensee = f.lic || 'Unlicensed';
-                            const svc = f.svc || '';
-                            const county = f.county || 'Unknown County';
-                            const stateName = getStateName(f.state);
-                            marker.bindPopup(
-                                `<div style="font-family:sans-serif;min-width:200px">` +
-                                `<strong style="font-size:1.1em"><a href="/license/${cs}">${cs}</a></strong><br>` +
-                                `<span style="color:#666">${licensee}</span><br>` +
-                                `<span style="font-size:0.85em;color:#888">${svc} &middot; ${county}, ${stateName}</span></div>`
-                            );
-                            antennaMarkers.addLayer(marker);
-                        } else {
-                            // Show circle for multiple licenses
-                            const r = clusterRadius(cnt);
-                            const color = clusterColor(cnt);
-                            const circle = L.circleMarker([lat, lng], {
-                                renderer: canvasRenderer,
-                                radius: r,
-                                fillColor: color,
-                                color: '#0f172a',
-                                weight: 0.6,
-                                opacity: 0.6,
-                                fillOpacity: 0.4,
-                            });
-                            const county = f.county || 'Unknown';
-                            const stateName = getStateName(f.state);
-                            const cntFmt = Number(cnt).toLocaleString();
-                            circle.bindPopup(
-                                `<div style="font-family:sans-serif;min-width:180px">` +
-                                `<strong>${county}, ${stateName}</strong><br>` +
-                                `<span style="color:#666">${cntFmt} licenses in this area</span><br>` +
-                                `<span style="font-size:0.85em;color:#888">Zoom in for details</span></div>`
-                            );
-                            // Show count label for large clusters
-                            if (cnt >= 10) {
-                                circle.bindTooltip(cntFmt, {
-                                    permanent: true,
-                                    direction: 'center',
-                                    className: 'cluster-label',
-                                });
-                            }
-                            pointsLayer.addLayer(circle);
                         }
+                        pointsLayer.addLayer(circle);
                     } else {
                         // Individual point — antenna icon from external SVG (detail mode)
                         const antennaIcon = L.icon({

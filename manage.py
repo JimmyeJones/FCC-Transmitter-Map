@@ -9,6 +9,8 @@ Usage:
     python manage.py stats
     python manage.py init-db
     python manage.py init-services
+    python manage.py load-counties
+    python manage.py fill-counties
     python manage.py run-server
 """
 

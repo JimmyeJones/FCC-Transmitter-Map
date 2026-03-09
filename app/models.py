@@ -138,3 +138,26 @@ class Frequency(Base):
 
     def __repr__(self) -> str:
         return f"<Frequency {self.frequency_mhz} MHz>"
+
+
+class CountyBoundary(Base):
+    """US County boundary polygons for local reverse geocoding."""
+
+    __tablename__ = "county_boundaries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    state_fips: Mapped[str] = mapped_column(String(2), nullable=False)
+    county_fips: Mapped[str] = mapped_column(String(3), nullable=False)
+    state_abbrev: Mapped[str] = mapped_column(String(2), nullable=False, index=True)
+    county_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    
+    # PostGIS geometry column for polygon (SRID 4326 = WGS84)
+    geom = mapped_column(Geometry("MULTIPOLYGON", srid=4326), nullable=False)
+
+    __table_args__ = (
+        Index("ix_county_boundaries_geom", "geom", postgresql_using="gist"),
+        Index("ix_county_boundaries_state_county", "state_abbrev", "county_name"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<CountyBoundary {self.county_name}, {self.state_abbrev}>"
