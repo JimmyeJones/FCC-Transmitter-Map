@@ -10,6 +10,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCo
 
 from app.config import get_settings
 from app.models import License, Location, Frequency
+from app.utils import parse_emission_designator
 from fcc_importer.parser import parse_zip_file
 from fcc_importer.normalizer import (
     build_bundles,
@@ -552,6 +553,351 @@ async def weekly_import(
             total_freq += fr
 
     console.rule("[bold green]Weekly Update Complete[/]")
+    console.print(f"  Licenses:    {total_lic:>12,}")
+    console.print(f"  Locations:   {total_loc:>12,}")
+    console.print(f"  Frequencies: {total_freq:>12,}")
+
+    await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Memory-efficient streaming import for low-RAM environments
+# ---------------------------------------------------------------------------
+
+
+async def streaming_import_zip(
+    zip_path: Path,
+    session_factory: async_sessionmaker,
+    batch_size: int = 2000,
+) -> tuple[int, int, int]:
+    """Import a single FCC ZIP file using streaming/chunked processing.
+    
+    This version uses much less memory by:
+    1. Loading EN (entity) data into a dict first (needed for joins)
+    2. Streaming HD records in chunks, inserting licenses
+    3. Streaming LO records, inserting locations in batches
+    4. Streaming FR records, inserting frequencies in batches
+    
+    The USI -> license_id and (USI, loc_num) -> location_id mappings are
+    built incrementally and kept in memory, but the raw parsed data is streamed.
+    """
+    from fcc_importer.parser import (
+        extract_zip_to_dir,
+        iter_hd_file,
+        iter_en_file,
+        iter_lo_file,
+        iter_fr_file,
+    )
+    
+    console.print(f"[cyan]Streaming import:[/] {zip_path.name}")
+    
+    # Extract ZIP
+    extract_dir = extract_zip_to_dir(zip_path)
+    
+    # Step 1: Load EN records into memory (needed for joining with HD)
+    # This is unavoidable but we only store minimal data
+    console.print("  [cyan]Loading entity data...[/]")
+    en_by_usi: dict[str, tuple[str, str]] = {}  # usi -> (name, frn)
+    en_count = 0
+    for en in iter_en_file(extract_dir):
+        usi = en.unique_system_identifier.strip()
+        if usi:
+            name = en.entity_name.strip()
+            if not name:
+                parts = [en.first_name.strip(), en.last_name.strip()]
+                name = " ".join(p for p in parts if p)
+            en_by_usi[usi] = (name or None, en.frn.strip() or None)
+            en_count += 1
+    console.print(f"  [green]Loaded {en_count:,} entity records[/]")
+    
+    # Step 2: Stream HD records in chunks, insert licenses
+    console.print("  [cyan]Importing licenses...[/]")
+    usi_to_license_id: dict[str, int] = {}
+    usi_to_radio_service: dict[str, str] = {}
+    license_count = 0
+    
+    for hd_chunk in iter_hd_file(extract_dir, chunk_size=batch_size):
+        license_rows = []
+        chunk_usis = []
+        
+        for hd in hd_chunk:
+            usi = hd.unique_system_identifier.strip()
+            if not usi:
+                continue
+            callsign = hd.callsign.strip()
+            if not callsign:
+                continue
+            
+            en_data = en_by_usi.get(usi)
+            licensee_name, frn = en_data if en_data else (None, None)
+            
+            license_rows.append({
+                "unique_system_identifier": int(usi) if usi.isdigit() else None,
+                "callsign": callsign,
+                "licensee_name": licensee_name,
+                "radio_service": hd.radio_service_code.strip() or None,
+                "status": hd.license_status.strip() or None,
+                "grant_date": _parse_date_safe(hd.grant_date),
+                "expiration_date": _parse_date_safe(hd.expired_date),
+                "effective_date": _parse_date_safe(hd.effective_date),
+                "frn": frn,
+            })
+            chunk_usis.append(usi)
+            usi_to_radio_service[usi] = hd.radio_service_code.strip()
+        
+        if license_rows:
+            async with session_factory() as session:
+                await session.execute(text("SET synchronous_commit = off"))
+                result = await session.execute(
+                    insert(License).returning(License.id),
+                    license_rows,
+                )
+                license_ids = [row[0] for row in result]
+                await session.commit()
+                
+                for usi, lid in zip(chunk_usis, license_ids):
+                    usi_to_license_id[usi] = lid
+                license_count += len(license_ids)
+    
+    console.print(f"  [green]Inserted {license_count:,} licenses[/]")
+    
+    # Free EN memory - no longer needed
+    del en_by_usi
+    
+    # Step 3: Stream LO records, insert locations in batches
+    console.print("  [cyan]Importing locations...[/]")
+    location_key_to_id: dict[tuple[str, int | None], int] = {}  # (usi, loc_num) -> location_id
+    location_count = 0
+    location_batch = []
+    location_keys = []
+    
+    for lo in iter_lo_file(extract_dir):
+        usi = lo.unique_system_identifier.strip()
+        if usi not in usi_to_license_id:
+            continue
+        
+        license_id = usi_to_license_id[usi]
+        loc_num = int(lo.location_number) if lo.location_number.strip().isdigit() else None
+        
+        lat = _dms_to_decimal_safe(lo.lat_degrees, lo.lat_minutes, lo.lat_seconds, lo.lat_direction)
+        lng = _dms_to_decimal_safe(lo.long_degrees, lo.long_minutes, lo.long_seconds, lo.long_direction)
+        
+        loc_row = {
+            "license_id": license_id,
+            "location_number": loc_num,
+            "latitude": lat,
+            "longitude": lng,
+            "county": lo.county.strip() or None,
+            "state": lo.state.strip() or None,
+            "radius_km": _parse_float_safe(lo.radius_of_operation),
+            "ground_elevation": _parse_float_safe(lo.ground_elevation),
+            "lat_degrees": int(lo.lat_degrees) if lo.lat_degrees.strip().isdigit() else None,
+            "lat_minutes": int(lo.lat_minutes) if lo.lat_minutes.strip().isdigit() else None,
+            "lat_seconds": _parse_float_safe(lo.lat_seconds),
+            "lat_direction": lo.lat_direction.strip() or None,
+            "long_degrees": int(lo.long_degrees) if lo.long_degrees.strip().isdigit() else None,
+            "long_minutes": int(lo.long_minutes) if lo.long_minutes.strip().isdigit() else None,
+            "long_seconds": _parse_float_safe(lo.long_seconds),
+            "long_direction": lo.long_direction.strip() or None,
+        }
+        
+        if lat is not None and lng is not None:
+            loc_row["geom"] = f"SRID=4326;POINT({lng} {lat})"
+        
+        location_batch.append(loc_row)
+        location_keys.append((usi, loc_num))
+        
+        if len(location_batch) >= batch_size:
+            async with session_factory() as session:
+                await session.execute(text("SET synchronous_commit = off"))
+                result = await session.execute(
+                    insert(Location).returning(Location.id),
+                    location_batch,
+                )
+                loc_ids = [row[0] for row in result]
+                await session.commit()
+                
+                for key, loc_id in zip(location_keys, loc_ids):
+                    location_key_to_id[key] = loc_id
+                location_count += len(loc_ids)
+            location_batch = []
+            location_keys = []
+    
+    # Insert remaining locations
+    if location_batch:
+        async with session_factory() as session:
+            await session.execute(text("SET synchronous_commit = off"))
+            result = await session.execute(
+                insert(Location).returning(Location.id),
+                location_batch,
+            )
+            loc_ids = [row[0] for row in result]
+            await session.commit()
+            
+            for key, loc_id in zip(location_keys, loc_ids):
+                location_key_to_id[key] = loc_id
+            location_count += len(loc_ids)
+    
+    console.print(f"  [green]Inserted {location_count:,} locations[/]")
+    
+    # Step 4: Stream FR records, insert frequencies in batches
+    console.print("  [cyan]Importing frequencies...[/]")
+    frequency_count = 0
+    freq_batch = []
+    
+    for fr in iter_fr_file(extract_dir):
+        usi = fr.unique_system_identifier.strip()
+        if usi not in usi_to_license_id:
+            continue
+        
+        loc_num = int(fr.location_number) if fr.location_number.strip().isdigit() else None
+        location_id = location_key_to_id.get((usi, loc_num))
+        
+        # If no location found, try to find any location for this license
+        if location_id is None:
+            for (u, ln), lid in location_key_to_id.items():
+                if u == usi:
+                    location_id = lid
+                    break
+        
+        if location_id is None:
+            continue
+        
+        freq_mhz = _parse_float_safe(fr.frequency_assigned)
+        if freq_mhz is None:
+            continue
+        
+        emission = fr.emission_designator.strip()
+        parsed_em = parse_emission_designator(emission) if emission else {}
+        
+        freq_batch.append({
+            "location_id": location_id,
+            "frequency_mhz": freq_mhz,
+            "frequency_upper_mhz": _parse_float_safe(fr.frequency_upper_band),
+            "emission_designator": emission or None,
+            "power": _parse_float_safe(fr.power),
+            "station_class": fr.station_class_code.strip() or None,
+            "emission_bandwidth": parsed_em.get("bandwidth"),
+            "emission_modulation": parsed_em.get("modulation"),
+            "emission_signal_type": parsed_em.get("signal_type"),
+        })
+        
+        if len(freq_batch) >= batch_size:
+            async with session_factory() as session:
+                await session.execute(text("SET synchronous_commit = off"))
+                await session.execute(insert(Frequency), freq_batch)
+                await session.commit()
+                frequency_count += len(freq_batch)
+            freq_batch = []
+    
+    # Insert remaining frequencies
+    if freq_batch:
+        async with session_factory() as session:
+            await session.execute(text("SET synchronous_commit = off"))
+            await session.execute(insert(Frequency), freq_batch)
+            await session.commit()
+            frequency_count += len(freq_batch)
+    
+    console.print(f"  [green]Inserted {frequency_count:,} frequencies[/]")
+    
+    return license_count, location_count, frequency_count
+
+
+def _parse_date_safe(date_str: str):
+    """Safely parse a date string."""
+    from datetime import datetime
+    if not date_str or not date_str.strip():
+        return None
+    date_str = date_str.strip()
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y"):
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_float_safe(value: str) -> float | None:
+    """Safely parse a float."""
+    if not value or not value.strip():
+        return None
+    try:
+        return float(value.strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def _dms_to_decimal_safe(degrees: str, minutes: str, seconds: str, direction: str) -> float | None:
+    """Convert DMS to decimal degrees safely."""
+    d = int(degrees) if degrees.strip().isdigit() else None
+    if d is None:
+        return None
+    m = int(minutes) if minutes.strip().isdigit() else 0
+    s = _parse_float_safe(seconds) or 0.0
+    decimal = d + m / 60.0 + s / 3600.0
+    if direction and direction.strip().upper() in ("S", "W"):
+        decimal = -decimal
+    return decimal
+
+
+async def full_import_streaming(
+    data_dir: str | None = None,
+    batch_size: int = 2000,
+) -> None:
+    """Run a full import using memory-efficient streaming.
+    
+    This version processes files one at a time and streams records
+    in batches, making it suitable for low-memory VPS environments.
+    """
+    from fcc_importer.downloader import download_full
+
+    data_dir = data_dir or settings.fcc_data_dir
+
+    console.rule("[bold blue]FCC Full Import (Streaming Mode)[/]")
+
+    # Download
+    console.print("[bold]Step 1: Download FCC data[/]")
+    zip_files = await download_full(data_dir)
+
+    if not zip_files:
+        console.print("[red]No files downloaded![/]")
+        return
+
+    engine = create_async_engine(
+        settings.database_url,
+        pool_size=4,
+        max_overflow=2,
+    )
+    async_sess = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    # Init reference data
+    console.print("[bold]Step 2: Initialize reference data[/]")
+    async with async_sess() as session:
+        await init_radio_services(session)
+
+    # Wipe tables
+    console.print("[bold]Step 3: Clear existing data[/]")
+    await clear_all_data(engine)
+
+    # Drop indexes
+    console.print("[bold]Step 4: Drop indexes for bulk load[/]")
+    await _drop_import_indexes(engine)
+
+    # Stream import each file
+    console.print("[bold]Step 5: Import data (streaming mode)[/]")
+    total_lic = total_loc = total_freq = 0
+    for zf in zip_files:
+        if zf.exists():
+            lc, lo, fr = await streaming_import_zip(zf, async_sess, batch_size=batch_size)
+            total_lic += lc
+            total_loc += lo
+            total_freq += fr
+
+    # Rebuild indexes
+    console.print("[bold]Step 6: Rebuild indexes[/]")
+    await _recreate_import_indexes(engine)
+
+    console.rule("[bold green]Import Complete[/]")
     console.print(f"  Licenses:    {total_lic:>12,}")
     console.print(f"  Locations:   {total_loc:>12,}")
     console.print(f"  Frequencies: {total_freq:>12,}")

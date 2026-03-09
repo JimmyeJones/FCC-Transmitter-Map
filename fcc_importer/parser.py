@@ -272,3 +272,83 @@ def parse_zip_file(zip_path: Path) -> dict[str, list]:
         console.print(f"  [green]{record_type}:[/] {count:,} records")
 
     return results
+
+
+def extract_zip_to_dir(zip_path: Path) -> Path:
+    """Extract a ZIP file and return the extraction directory."""
+    return _extract_zip(zip_path, zip_path.parent / "_extracted")
+
+
+def iter_hd_file(extract_dir: Path, chunk_size: int = 50000) -> Generator[list[RawLicense], None, None]:
+    """Yield chunks of HD (license header) records for memory-efficient processing."""
+    filepath = extract_dir / "HD.dat"
+    if not filepath.exists():
+        filepath = extract_dir / "HD.DAT"
+    if not filepath.exists():
+        return
+
+    chunk: list[RawLicense] = []
+    for row in _parse_pipe_file(filepath):
+        if len(row) < 2:
+            continue
+        try:
+            parsed = parse_hd_row(row)
+            chunk.append(parsed)
+            if len(chunk) >= chunk_size:
+                yield chunk
+                chunk = []
+        except (IndexError, ValueError):
+            continue
+    if chunk:
+        yield chunk
+
+
+def iter_en_file(extract_dir: Path) -> Generator[RawEntity, None, None]:
+    """Yield EN (entity) records one at a time."""
+    filepath = extract_dir / "EN.dat"
+    if not filepath.exists():
+        filepath = extract_dir / "EN.DAT"
+    if not filepath.exists():
+        return
+
+    for row in _parse_pipe_file(filepath):
+        if len(row) < 2:
+            continue
+        try:
+            yield parse_en_row(row)
+        except (IndexError, ValueError):
+            continue
+
+
+def iter_lo_file(extract_dir: Path) -> Generator[RawLocation, None, None]:
+    """Yield LO (location) records one at a time."""
+    filepath = extract_dir / "LO.dat"
+    if not filepath.exists():
+        filepath = extract_dir / "LO.DAT"
+    if not filepath.exists():
+        return
+
+    for row in _parse_pipe_file(filepath):
+        if len(row) < 2:
+            continue
+        try:
+            yield parse_lo_row(row)
+        except (IndexError, ValueError):
+            continue
+
+
+def iter_fr_file(extract_dir: Path) -> Generator[RawFrequency, None, None]:
+    """Yield FR (frequency) records one at a time."""
+    filepath = extract_dir / "FR.dat"
+    if not filepath.exists():
+        filepath = extract_dir / "FR.DAT"
+    if not filepath.exists():
+        return
+
+    for row in _parse_pipe_file(filepath):
+        if len(row) < 2:
+            continue
+        try:
+            yield parse_fr_row(row)
+        except (IndexError, ValueError):
+            continue

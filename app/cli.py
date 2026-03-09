@@ -38,6 +38,23 @@ def import_update(
 
 
 @app.command()
+def import_streaming(
+    data_dir: str = typer.Option(None, help="Directory to store downloaded FCC data"),
+    batch_size: int = typer.Option(2000, help="Records per DB insert batch"),
+):
+    """Run a memory-efficient streaming import for low-RAM environments.
+
+    This mode processes data in small chunks rather than loading entire files
+    into memory. Use this if the standard import-full command crashes due to
+    out-of-memory errors on your VPS.
+    """
+    from fcc_importer.loader import full_import_streaming
+    console.print(f"[bold blue]Starting streaming FCC data import[/] "
+                  f"(batch={batch_size:,}, low-memory mode)")
+    asyncio.run(full_import_streaming(data_dir, batch_size=batch_size))
+
+
+@app.command()
 def init_db(
     drop_existing: bool = typer.Option(False, "--drop", help="Drop existing tables first"),
 ):
