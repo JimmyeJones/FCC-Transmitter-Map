@@ -160,7 +160,7 @@ FCC_CACHE_TTL=3600
 1. **Clone repository and prepare environment**
    ```bash
    git clone https://github.com/JimmyeJones/FCC-Transmitter-Map
-   cd fcc
+   cd FCC-Transmitter-Map
    cp .env.example .env
    # Edit .env with your production settings
    ```
