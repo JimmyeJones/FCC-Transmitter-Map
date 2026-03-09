@@ -594,6 +594,31 @@ async def streaming_import_zip(
     # Extract ZIP
     extract_dir = extract_zip_to_dir(zip_path)
     
+    # Step 0: Scan HD file to collect all radio service codes and auto-insert missing ones
+    console.print("  [cyan]Scanning for radio service codes...[/]")
+    all_service_codes: set[str] = set()
+    for hd_chunk in iter_hd_file(extract_dir, chunk_size=10000):
+        for hd in hd_chunk:
+            code = hd.radio_service_code.strip()
+            if code:
+                all_service_codes.add(code)
+    
+    if all_service_codes:
+        async with session_factory() as session:
+            # Get existing codes
+            result = await session.execute(text("SELECT code FROM radio_services"))
+            existing_codes = {row[0] for row in result}
+            missing_codes = all_service_codes - existing_codes
+            
+            if missing_codes:
+                console.print(f"  [yellow]Auto-inserting {len(missing_codes)} new radio service codes:[/] {', '.join(sorted(missing_codes))}")
+                for code in sorted(missing_codes):
+                    await session.execute(
+                        text("INSERT INTO radio_services (code, description) VALUES (:c, :d) ON CONFLICT DO NOTHING"),
+                        {"c": code, "d": f"Auto-discovered ({code})"},
+                    )
+                await session.commit()
+    
     # Step 1: Load EN records into memory (needed for joining with HD)
     # This is unavoidable but we only store minimal data
     console.print("  [cyan]Loading entity data...[/]")
