@@ -23,16 +23,8 @@ FULL_DOWNLOAD_FILES = [
     # Radio Services
     "l_micro.zip",    # Microwave
     "l_coast.zip",    # Coastal
-    "l_aviation.zip", # Aviation
-    "l_IG.zip",       # Industrial/Business
     "l_market.zip",   # Market-based
     "l_paging.zip",   # Paging
-    # Public Safety
-    "l_public.zip",   # Public Safety Pool
-    # Amateur Radio
-    "l_amateur.zip",  # Amateur Radio
-    # Other services
-    "l_other.zip",    # Miscellaneous (ATVs, Telemetry, etc)
 ]
 
 WEEKLY_UPDATE_FILES = [
@@ -43,16 +35,8 @@ WEEKLY_UPDATE_FILES = [
     # Radio Services
     "a_micro.zip",
     "a_coast.zip",
-    "a_aviation.zip",
-    "a_IG.zip",
     "a_market.zip",
     "a_paging.zip",
-    # Public Safety
-    "a_public.zip",
-    # Amateur Radio
-    "a_amateur.zip",
-    # Other services
-    "a_other.zip",
 ]
 
 
