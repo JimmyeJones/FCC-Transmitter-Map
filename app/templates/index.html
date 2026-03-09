@@ -287,6 +287,15 @@
     
     // Create antenna marker layer with custom pane
     let antennaMarkers = L.layerGroup().addTo(map);
+    
+    // Global layer group for ALL spider elements - ensures proper cleanup
+    let spiderLayerGroup = L.layerGroup().addTo(map);
+    
+    // Track all active cluster groups for collapse-all functionality
+    let activeClusterGroups = [];
+    
+    // Track currently expanded cluster coord key (persists across data reloads)
+    let expandedClusterKey = null;
 
     // Load states for filter dropdown
     fetch('/api/states')
@@ -365,9 +374,9 @@
 
     // -- helpers for cluster circle sizing / color --------------------
     function clusterRadius(cnt) {
-        if (cnt <= 1) return 3;
-        // log-scale: min 3.5, max 12 for minimal visual clutter
-        return Math.min(12, 3.5 + Math.log2(cnt) * 1.2);
+        if (cnt <= 1) return 5;
+        // log-scale: min 5.5, max 14 for better visibility
+        return Math.min(14, 5.5 + Math.log2(cnt) * 1.2);
     }
 
     function clusterColor(cnt) {
@@ -431,24 +440,37 @@
                 if (requestToken !== latestMapRequestToken) return;
                 if (!data || !data.features) throw new Error('Invalid response from server');
 
-                // Clear previous layers
-                pointsLayer.clearLayers();
-                antennaMarkers.clearLayers();
-
                 const isCluster = data.mode === 'cluster';
                 const feats = data.features || [];
                 let skipped = 0;
+                
+                // Determine if we should preserve the spider (staying in detail mode with expanded cluster)
+                const preserveSpider = !isCluster && expandedClusterKey !== null;
 
-                feats.forEach(f => {
-                    const lat = Number(f.lat);
-                    const lng = Number(f.lng);
-                    if (!Number.isFinite(lat) || !Number.isFinite(lng) ||
-                        lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-                        skipped++;
-                        return;
-                    }
+                // Clear previous layers
+                pointsLayer.clearLayers();
+                antennaMarkers.clearLayers();
+                
+                // Only clear spider layer when switching to cluster mode or no expanded cluster
+                if (!preserveSpider) {
+                    spiderLayerGroup.clearLayers();
+                }
+                activeClusterGroups = [];
 
-                    if (isCluster) {
+                if (isCluster) {
+                    // Cluster mode - clear expanded key since detail clusters don't exist
+                    expandedClusterKey = null;
+                    
+                    // Cluster mode - display as before
+                    feats.forEach(f => {
+                        const lat = Number(f.lat);
+                        const lng = Number(f.lng);
+                        if (!Number.isFinite(lat) || !Number.isFinite(lng) ||
+                            lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                            skipped++;
+                            return;
+                        }
+
                         const cnt = f.cnt || 1;
                         
                         // In cluster mode, always show circles (even for cnt=1)
@@ -483,30 +505,355 @@
                             });
                         }
                         pointsLayer.addLayer(circle);
-                    } else {
-                        // Individual point — antenna icon from external SVG (detail mode)
-                        const antennaIcon = L.icon({
-                            iconUrl: 'https://uxwing.com/wp-content/themes/uxwing/download/internet-network-technology/antenna-icon.svg',
-                            iconSize: [32, 40],
-                            iconAnchor: [16, 40],
-                            popupAnchor: [0, -40],
-                            className: 'antenna-icon',
+                    });
+                } else {
+                    // Detail mode - group by proximity to handle overlapping/nearby markers
+                    const coordGroups = new Map();
+                    
+                    // Distance threshold in meters for grouping nearby antennas
+                    const PROXIMITY_THRESHOLD = 30;
+                    
+                    // Helper function to calculate distance between two lat/lng points in meters (Haversine formula)
+                    const calcDistance = (lat1, lng1, lat2, lng2) => {
+                        const R = 6371000; // Earth radius in meters
+                        const dLat = (lat2 - lat1) * Math.PI / 180;
+                        const dLng = (lng2 - lng1) * Math.PI / 180;
+                        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                                Math.sin(dLng / 2) * Math.sin(dLng / 2);
+                        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                        return R * c;
+                    };
+                    
+                    // First pass: group features by proximity clustering
+                    const validFeatures = [];
+                    feats.forEach(f => {
+                        const lat = Number(f.lat);
+                        const lng = Number(f.lng);
+                        if (!Number.isFinite(lat) || !Number.isFinite(lng) ||
+                            lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                            skipped++;
+                            return;
+                        }
+                        validFeatures.push({ ...f, lat, lng });
+                    });
+                    
+                    // Cluster features based on proximity
+                    const clustered = new Set();
+                    validFeatures.forEach((f, idx) => {
+                        if (clustered.has(idx)) return; // Already in a cluster
+                        
+                        // Start a new cluster with this feature
+                        const cluster = [f];
+                        clustered.add(idx);
+                        
+                        // Find all other features within threshold distance
+                        validFeatures.forEach((other, otherIdx) => {
+                            if (clustered.has(otherIdx)) return;
+                            
+                            const dist = calcDistance(f.lat, f.lng, other.lat, other.lng);
+                            if (dist <= PROXIMITY_THRESHOLD) {
+                                cluster.push(other);
+                                clustered.add(otherIdx);
+                            }
                         });
-                        const marker = L.marker([lat, lng], { icon: antennaIcon, pane: 'antennaPane' });
-                        const cs = f.cs || 'UNKNOWN';
-                        const licensee = f.lic || 'Unlicensed';
-                        const svc = f.svc || '';
-                        const county = f.county || 'Unknown County';
-                        const stateName = getStateName(f.state);
-                        marker.bindPopup(
-                            `<div style="font-family:sans-serif;min-width:200px">` +
-                            `<strong style="font-size:1.1em"><a href="/license/${cs}">${cs}</a></strong><br>` +
-                            `<span style="color:#666">${licensee}</span><br>` +
-                            `<span style="font-size:0.85em;color:#888">${svc} &middot; ${county}, ${stateName}</span></div>`
-                        );
-                        antennaMarkers.addLayer(marker);
+                        
+                        // Calculate cluster center (centroid of all points)
+                        const centerLat = cluster.reduce((sum, item) => sum + item.lat, 0) / cluster.length;
+                        const centerLng = cluster.reduce((sum, item) => sum + item.lng, 0) / cluster.length;
+                        const key = `${centerLat.toFixed(6)},${centerLng.toFixed(6)}`;
+                        
+                        coordGroups.set(key, cluster);
+                    });
+
+                    // Second pass: create markers
+                    coordGroups.forEach((group, coordKey) => {
+                        const [latStr, lngStr] = coordKey.split(',');
+                        const centerLat = parseFloat(latStr);
+                        const centerLng = parseFloat(lngStr);
+
+                        if (group.length === 1) {
+                            // Single marker - display normally
+                            const f = group[0];
+                            const antennaIcon = L.icon({
+                                iconUrl: 'https://uxwing.com/wp-content/themes/uxwing/download/internet-network-technology/antenna-icon.svg',
+                                iconSize: [32, 40],
+                                iconAnchor: [16, 40],
+                                popupAnchor: [0, -40],
+                                className: 'antenna-icon',
+                            });
+                            const marker = L.marker([f.lat, f.lng], { icon: antennaIcon, pane: 'antennaPane' });
+                            const cs = f.cs || 'UNKNOWN';
+                            const licensee = f.lic || 'Unlicensed';
+                            const svc = f.svc || '';
+                            const county = f.county || 'Unknown County';
+                            const stateName = getStateName(f.state);
+                            marker.bindPopup(
+                                `<div style="font-family:sans-serif;min-width:200px">` +
+                                `<strong style="font-size:1.1em"><a href="/license/${cs}">${cs}</a></strong><br>` +
+                                `<span style="color:#666">${licensee}</span><br>` +
+                                `<span style="font-size:0.85em;color:#888">${svc} &middot; ${county}, ${stateName}</span></div>`
+                            );
+                            antennaMarkers.addLayer(marker);
+                        } else {
+                            // Multiple markers at same location - show collapsed cluster marker initially
+                            // Track expansion state and spider layers
+                            let isExpanded = false;
+                            let isTransitioning = false;
+                            let currentSpiderGroup = null;
+                            const thisCoordKey = coordKey; // capture for closure
+
+                            // Draw cluster marker with count badge
+                            const clusterMarker = L.circleMarker([centerLat, centerLng], {
+                                radius: 10,
+                                fillColor: '#ef4444',
+                                color: '#991b1b',
+                                weight: 2,
+                                opacity: 0.9,
+                                fillOpacity: 0.7,
+                            });
+                            
+                            // Add count label
+                            clusterMarker.bindTooltip(String(group.length), {
+                                permanent: true,
+                                direction: 'center',
+                                className: 'cluster-label',
+                                offset: [0, 0]
+                            });
+
+                            // Function to expand spider layout
+                            const expandSpider = () => {
+                                if (isExpanded || isTransitioning) return;
+                                isTransitioning = true;
+                                
+                                // Force collapse ALL other expanded clusters first (with force=true to bypass state checks)
+                                activeClusterGroups.forEach(otherCluster => {
+                                    if (otherCluster.collapse) {
+                                        otherCluster.collapse(true); // force collapse
+                                    }
+                                });
+                                
+                                // Clear the global spider layer group to remove any orphaned elements
+                                spiderLayerGroup.clearLayers();
+                                currentSpiderGroup = null;
+
+                                // Close and unbind popup to prevent interference
+                                clusterMarker.closePopup();
+                                clusterMarker.unbindPopup();
+
+                                // Create fresh spider group
+                                currentSpiderGroup = L.layerGroup();
+                                
+                                isExpanded = true;
+                                isTransitioning = false;
+
+                                // Keep center marker visible and clickable for collapse
+                                clusterMarker.setStyle({
+                                    radius: 8,
+                                    fillOpacity: 0.6,
+                                    opacity: 0.8
+                                });
+                                clusterMarker.unbindTooltip();
+                                clusterMarker.bindTooltip('✕', {
+                                    permanent: true,
+                                    direction: 'center',
+                                    className: 'cluster-label',
+                                    offset: [0, 0]
+                                });
+
+                                // Calculate spider leg radius based on number of transmitters
+                                // More transmitters = longer lines to prevent overlap
+                                let radiusMeters;
+                                if (group.length <= 2) {
+                                    radiusMeters = 50;
+                                } else if (group.length <= 4) {
+                                    radiusMeters = 80;
+                                } else if (group.length <= 8) {
+                                    radiusMeters = 120;
+                                } else if (group.length <= 15) {
+                                    radiusMeters = 180;
+                                } else {
+                                    radiusMeters = 250;
+                                }
+                                
+                                const angleStep = (2 * Math.PI) / group.length;
+
+                                group.forEach((f, idx) => {
+                                    const angle = angleStep * idx;
+                                    
+                                    // Convert meters to lat/lng offset (approximate)
+                                    const latOffset = (radiusMeters / 111000) * Math.cos(angle);
+                                    const lngOffset = (radiusMeters / (111000 * Math.cos(centerLat * Math.PI / 180))) * Math.sin(angle);
+                                    
+                                    const spiderLat = centerLat + latOffset;
+                                    const spiderLng = centerLng + lngOffset;
+
+                                    // Draw line from center to spider position
+                                    const line = L.polyline(
+                                        [[centerLat, centerLng], [spiderLat, spiderLng]],
+                                        { color: '#6b7280', weight: 1.5, opacity: 0.6, dashArray: '4, 4' }
+                                    );
+                                    currentSpiderGroup.addLayer(line);
+
+                                    // Place marker at spider position
+                                    const antennaIcon = L.icon({
+                                        iconUrl: 'https://uxwing.com/wp-content/themes/uxwing/download/internet-network-technology/antenna-icon.svg',
+                                        iconSize: [28, 35],
+                                        iconAnchor: [14, 35],
+                                        popupAnchor: [0, -35],
+                                        className: 'antenna-icon',
+                                    });
+                                    const marker = L.marker([spiderLat, spiderLng], { icon: antennaIcon, pane: 'antennaPane' });
+                                    const cs = f.cs || 'UNKNOWN';
+                                    const licensee = f.lic || 'Unlicensed';
+                                    const svc = f.svc || '';
+                                    const county = f.county || 'Unknown County';
+                                    const stateName = getStateName(f.state);
+                                    marker.bindPopup(
+                                        `<div style="font-family:sans-serif;min-width:200px">` +
+                                        `<strong style="font-size:1.1em"><a href="/license/${cs}">${cs}</a></strong><br>` +
+                                        `<span style="color:#666">${licensee}</span><br>` +
+                                        `<span style="font-size:0.85em;color:#888">${svc} &middot; ${county}, ${stateName}</span><br>` +
+                                        `<span style="font-size:0.75em;color:#f97316">Co-located with ${group.length - 1} other(s)</span></div>`
+                                    );
+                                    currentSpiderGroup.addLayer(marker);
+                                });
+
+                                // Add spider group to the global spider layer (not directly to map)
+                                // This ensures proper cleanup when clearing layers
+                                spiderLayerGroup.addLayer(currentSpiderGroup);
+                                
+                                // Save this as the currently expanded cluster
+                                expandedClusterKey = thisCoordKey;
+                                
+                                // Bring center marker to front so it's always clickable
+                                clusterMarker.bringToFront();
+                            };
+
+                            // Function to collapse spider layout
+                            // force parameter bypasses state checks (used when another cluster expands)
+                            const collapseSpider = (force = false) => {
+                                if (!force && (!isExpanded || isTransitioning)) return;
+                                isTransitioning = true;
+
+                                // Remove spider elements from global spider layer
+                                if (currentSpiderGroup) {
+                                    try {
+                                        currentSpiderGroup.clearLayers();
+                                        spiderLayerGroup.removeLayer(currentSpiderGroup);
+                                    } catch (e) {
+                                        console.warn('Error removing spider group:', e);
+                                    }
+                                    currentSpiderGroup = null;
+                                }
+                                
+                                isExpanded = false;
+                                isTransitioning = false;
+
+                                // Restore cluster marker to original state
+                                clusterMarker.setStyle({
+                                    radius: 10,
+                                    fillOpacity: 0.7,
+                                    opacity: 0.9
+                                });
+                                clusterMarker.unbindTooltip();
+                                clusterMarker.bindTooltip(String(group.length), {
+                                    permanent: true,
+                                    direction: 'center',
+                                    className: 'cluster-label',
+                                    offset: [0, 0]
+                                });
+                                
+                                // Rebind popup
+                                clusterMarker.bindPopup(popupContent);
+                                
+                                // Clear expanded key only if this cluster was the expanded one
+                                if (expandedClusterKey === thisCoordKey) {
+                                    expandedClusterKey = null;
+                                }
+                            };
+
+                            // Create cluster control object
+                            const clusterControl = {
+                                expand: expandSpider,
+                                collapse: collapseSpider,
+                                isExpanded: () => isExpanded,
+                                coordKey: thisCoordKey,
+                                // Mark cluster as expanded visually without rebuilding spider
+                                // Used when spider is preserved across data reloads
+                                markAsExpanded: () => {
+                                    isExpanded = true;
+                                    clusterMarker.closePopup();
+                                    clusterMarker.unbindPopup();
+                                    clusterMarker.setStyle({
+                                        radius: 8,
+                                        fillOpacity: 0.6,
+                                        opacity: 0.8
+                                    });
+                                    clusterMarker.unbindTooltip();
+                                    clusterMarker.bindTooltip('✕', {
+                                        permanent: true,
+                                        direction: 'center',
+                                        className: 'cluster-label',
+                                        offset: [0, 0]
+                                    });
+                                }
+                            };
+                            
+                            // Register this cluster in the active list
+                            activeClusterGroups.push(clusterControl);
+
+                            // Show popup with list of callsigns (only when collapsed)
+                            const callsigns = group.map(f => f.cs || 'UNKNOWN').join(', ');
+                            const popupContent = `<div style="font-family:sans-serif;min-width:200px">` +
+                                `<strong>${group.length} transmitters at this location</strong><br>` +
+                                `<span style="font-size:0.85em;color:#666">${callsigns}</span><br>` +
+                                `<span style="font-size:0.8em;color:#3b82f6;margin-top:4px;display:block">Click marker to expand</span></div>`;
+                            
+                            clusterMarker.bindPopup(popupContent);
+
+                            // Click to expand/collapse with debouncing
+                            let clickTimeout = null;
+                            clusterMarker.on('click', (e) => {
+                                L.DomEvent.stopPropagation(e);
+                                
+                                // Prevent rapid clicks
+                                if (isTransitioning) return;
+                                if (clickTimeout) return;
+                                
+                                clickTimeout = setTimeout(() => {
+                                    clickTimeout = null;
+                                }, 300);
+                                
+                                if (isExpanded) {
+                                    collapseSpider();
+                                } else {
+                                    expandSpider();
+                                }
+                            });
+
+                            antennaMarkers.addLayer(clusterMarker);
+                        }
+                    });
+                    
+                    // Re-expand previously expanded cluster if it still exists after data reload
+                    if (expandedClusterKey) {
+                        const clusterToExpand = activeClusterGroups.find(c => c.coordKey === expandedClusterKey);
+                        if (clusterToExpand) {
+                            if (preserveSpider) {
+                                // Spider was preserved - just update visual state without rebuild
+                                clusterToExpand.markAsExpanded();
+                            } else {
+                                // Spider was cleared - need full rebuild
+                                setTimeout(() => clusterToExpand.expand(), 50);
+                            }
+                        } else {
+                            // Cluster no longer exists (zoomed out to cluster mode, etc.)
+                            expandedClusterKey = null;
+                            spiderLayerGroup.clearLayers(); // Clean up orphaned spider
+                        }
                     }
-                });
+                }
 
                 if (skipped > 0) console.log(`Skipped ${skipped} invalid coords`);
 
