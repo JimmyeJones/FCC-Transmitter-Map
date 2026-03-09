@@ -1,0 +1,24 @@
+# Caddyfile for FCC Transmitter Map
+# The domain is set via the DOMAIN environment variable
+
+{$DOMAIN} {
+    # Reverse proxy to the web app
+    reverse_proxy web:8000 {
+        # Health checks
+        health_uri /api/health
+        health_interval 30s
+    }
+
+    # Compression
+    encode gzip
+
+    # Cache static assets
+    @static path /static/*
+    header @static Cache-Control "public, max-age=604800, immutable"
+
+    # Logging
+    log {
+        output stdout
+        format console
+    }
+}

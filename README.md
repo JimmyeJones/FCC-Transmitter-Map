@@ -187,6 +187,28 @@ FCC_CACHE_TTL=3600
    docker compose logs -f web
    ```
 
+### Enable HTTPS (Recommended)
+
+The app includes Caddy for automatic HTTPS with Let's Encrypt certificates.
+
+1. **Set your domain in `.env`**
+   ```bash
+   # Add this line to .env
+   DOMAIN=your-domain.com
+   ```
+
+2. **Ensure DNS points to your server**
+   - Create an A record: `your-domain.com` → `your-server-ip`
+
+3. **Start with HTTPS enabled**
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+   ```
+
+That's it! Caddy automatically obtains and renews SSL certificates from Let's Encrypt.
+
+Your site will be available at `https://your-domain.com`
+
 ### Automated Updates
 
 The application automatically updates FCC data every Monday at 2 AM (UTC). Key features:

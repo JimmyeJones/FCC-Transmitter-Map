@@ -1,0 +1,49 @@
+# Docker Compose override for HTTPS with Caddy
+# 
+# Usage:
+#   1. Set your domain in .env file: DOMAIN=your-domain.com
+#   2. Run: docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+#
+# Caddy automatically obtains and renews SSL certificates from Let's Encrypt!
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: fcc-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      - DOMAIN=${DOMAIN:?Please set DOMAIN in .env file}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # Disable nginx when using Caddy
+  nginx:
+    profiles:
+      - disabled
+
+volumes:
+  caddy_data:
+  caddy_config:
